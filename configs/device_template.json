@@ -1,0 +1,19 @@
+{
+  "asset_type": "turbofan",
+  "throttle_cmd": 0.6,
+  "device_type": "CNC",
+  "device_name": "Demo CNC",
+  "mission": {
+    "t_end": 60.0,
+    "dt": 0.1,
+    "spindle_rpm_cmd": 12000.0,
+    "feed_cmd": 2000.0,
+    "severity": 1.0
+  },
+  "limits": {
+    "N1": [0, 24000],
+    "N2": [0, 10000],
+    "Thrust": [0, 5000],
+    "Fuel": [0, 50]
+  }
+}
