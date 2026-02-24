@@ -8,7 +8,10 @@ from src.turbofan.hpc_subsystem import HPCSubsystem
 from src.turbofan.combustor import combustor_calc
 from src.turbofan.hpt_subsystem import HPTSubsystem
 from src.turbofan.lpt_subsystem import LPTSubsystem
+from src.turbofan.nozzle import nozzle_calc_isentropic_to_ambient
 
+
+from src.turbofan.nozzle import nozzle_calc_isentropic_to_ambient
 
 def run_turbofan_core_balanced(
     throttle_cmd: float = 0.6,
@@ -22,6 +25,8 @@ def run_turbofan_core_balanced(
     eff_mod_hpc: float = 1.0,
     eta_hpt: float = 0.9,
     eta_lpt: float = 0.9,
+    A_core_nozzle: float = 0.05,
+    A_bypass_nozzle: float = 0.20,
 ) -> Dict[str, float]:
     """
     Balanced two-spool core:
@@ -98,6 +103,26 @@ def run_turbofan_core_balanced(
         max_iter=80,
     )
 
+        # --- NOZZLES (core + bypass) ---
+    core_noz = nozzle_calc_isentropic_to_ambient(
+        Pt=lpt_out["P_out"],
+        Tt=lpt_out["T_out"],
+        mdot=comb_out["m_gas"],
+        P0=P0,
+        A_exit=A_core_nozzle,
+    )
+
+    mdot_bypass = fan_out["m_dot_core"] * BPR
+    bypass_noz = nozzle_calc_isentropic_to_ambient(
+        Pt=fan_out["P1_fan"],
+        Tt=fan_out["T1_raw"],
+        mdot=mdot_bypass,
+        P0=P0,
+        A_exit=A_bypass_nozzle,
+    )
+
+    thrust_total = core_noz["thrust"] + bypass_noz["thrust"]
+
     # Flatten “signals” for the framework
     signals = {
         # inlet
@@ -125,6 +150,13 @@ def run_turbofan_core_balanced(
         "m_fuel": float(comb_out["m_fuel"]),
         "FAR": float(comb_out["FAR"]),
         "m_gas": float(comb_out["m_gas"]),
+
+        # thrust
+        "Thrust_core": float(core_noz["thrust"]),
+        "Thrust_bypass": float(bypass_noz["thrust"]),
+        "Thrust": float(thrust_total),
+        "Vexit_core": float(core_noz["v_exit"]),
+        "Vexit_bypass": float(bypass_noz["v_exit"]),
 
         # map outputs / efficiencies / PR
         "PR_HPC": float(hpc_out["PR_HPC"]),
