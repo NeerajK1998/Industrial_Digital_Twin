@@ -121,7 +121,7 @@ def run_turbofan_core_balanced(
         A_exit=A_bypass_nozzle,
     )
 
-    thrust_total = core_noz["thrust"] + bypass_noz["thrust"]
+    thrust_total = core_noz["Thrust"] + bypass_noz["Thrust"]
 
     # Flatten “signals” for the framework
     signals = {
@@ -151,12 +151,11 @@ def run_turbofan_core_balanced(
         "FAR": float(comb_out["FAR"]),
         "m_gas": float(comb_out["m_gas"]),
 
-        # thrust
-        "Thrust_core": float(core_noz["thrust"]),
-        "Thrust_bypass": float(bypass_noz["thrust"]),
+        "Thrust_core": float(core_noz["Thrust"]),
+        "Thrust_bypass": float(bypass_noz["Thrust"]),
         "Thrust": float(thrust_total),
-        "Vexit_core": float(core_noz["v_exit"]),
-        "Vexit_bypass": float(bypass_noz["v_exit"]),
+        "Vexit_core": float(core_noz["Ve"]),
+        "Vexit_bypass": float(bypass_noz["Ve"]),
 
         # map outputs / efficiencies / PR
         "PR_HPC": float(hpc_out["PR_HPC"]),
