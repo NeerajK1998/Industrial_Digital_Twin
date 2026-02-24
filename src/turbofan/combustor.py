@@ -26,9 +26,10 @@ class CombustorParams:
     eta_burn: float = 0.99        # burner efficiency
     far_max_factor: float = 0.04  # m_fuel_max = factor * m_air (limit)
     dp: float = 0.0               # Pa (idealized)
+    mf_max: float = 1.2          # kg/s, used only in fuel_cmd mode (MATLAB-faithful)
     # throttle -> target T4 mapping
     T4_min: float = 1200.0        # K
-    T4_max: float = 1700.0        # K
+    T4_max: float = 2035.0       # K
 
 
 def combustor_calc(
@@ -36,6 +37,8 @@ def combustor_calc(
     T3: float,
     m_air: float,
     throttle_cmd: float,
+    *,
+    mode: str = "T4_cmd",  # "T4_cmd" (industrial) or "fuel_cmd" (MATLAB-faithful)
     params: CombustorParams = CombustorParams(),
 ) -> dict:
     """
@@ -55,33 +58,49 @@ def combustor_calc(
     # Constant total pressure (ideal)
     P4 = P3 - params.dp
 
-    # Commanded turbine inlet temperature
-    T4_cmd = params.T4_min + throttle * (params.T4_max - params.T4_min)
-
-    # If inlet already hotter than command, no fuel (fail-safe)
-    deltaT = max(0.0, float(T4_cmd) - float(T3))
-
-    # Energy balance
-    m_fuel = (m_air * params.cp_gas * deltaT) / (params.lhv * max(params.eta_burn, 1e-9))
-
-    # Limit by FAR max
+    # Limit by FAR max (shared)
     m_fuel_max = params.far_max_factor * m_air
-    if m_fuel > m_fuel_max:
-        m_fuel = m_fuel_max
-        # recompute achieved T4 if we hit fuel limit
+
+    if mode == "fuel_cmd":
+        # MATLAB-faithful: throttle directly scales fuel flow
+        m_fuel = throttle * params.mf_max
+
+        # Energy balance gives achieved T4 (no T4_cmd in this mode)
         T4 = float(T3) + (m_fuel * params.lhv * params.eta_burn) / (m_air * params.cp_gas)
+        T4_cmd = None
+
+    elif mode == "T4_cmd":
+        # Industrial: throttle commands T4 within bounds
+        T4_cmd = params.T4_min + throttle * (params.T4_max - params.T4_min)
+
+        # If inlet already hotter than command, no fuel (fail-safe)
+        deltaT = max(0.0, float(T4_cmd) - float(T3))
+
+        # Energy balance -> fuel
+        m_fuel = (m_air * params.cp_gas * deltaT) / (params.lhv * max(params.eta_burn, 1e-9))
+
+        # Clamp fuel (FAR max) and recompute achieved T4 if clamped
+        if m_fuel > m_fuel_max:
+            m_fuel = m_fuel_max
+            T4 = float(T3) + (m_fuel * params.lhv * params.eta_burn) / (m_air * params.cp_gas)
+        else:
+            T4 = float(T4_cmd)
+
     else:
-        T4 = float(T4_cmd)
+        raise ValueError(f"Unknown combustor mode: {mode}")
 
     FAR = m_fuel / m_air
     m_gas = m_air + m_fuel
 
-    return {
+    out = {
         "P4": float(P4),
         "T4": float(T4),
-        "T4_cmd": float(T4_cmd),
         "m_fuel": float(m_fuel),
         "m_fuel_max": float(m_fuel_max),
         "FAR": float(FAR),
         "m_gas": float(m_gas),
+        "mode": mode,
     }
+    if mode == "T4_cmd":
+        out["T4_cmd"] = float(T4_cmd)
+    return out

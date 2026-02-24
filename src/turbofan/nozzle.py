@@ -124,3 +124,58 @@ def nozzle_calc_isentropic_to_ambient(
         "Ve": float(Ve),
         "Thrust": float(thrust),
     }
+
+def nozzle_calc_report_simple(
+    *,
+    mdot: float,
+    Pt: float,
+    Tt: float,
+    P0: float,
+    A_exit: float,
+    gamma: float = 1.4,
+    R: float = 287.05,
+    V0: float = 0.0,
+) -> Dict[str, float]:
+    """
+    MATLAB/report-faithful nozzle (NozzleCalc.m-style):
+
+      Ve = sqrt(2*cp*Tt*(1 - (P0/Pt)^((gamma-1)/gamma)))
+      Thrust = mdot*(Ve - V0) + (Pt - P0)*A_exit
+
+    Note: This intentionally does NOT compute Pe/Te/Me or choking;
+          it's the simplified form used for Phase 1 fidelity check.
+    """
+    mdot = float(mdot)
+    Pt = float(Pt)
+    Tt = float(Tt)
+    P0 = float(P0)
+    A_exit = float(A_exit)
+    V0 = float(V0)
+
+    if mdot <= 0.0 or Pt <= 0.0 or Tt <= 0.0 or A_exit <= 0.0 or P0 <= 0.0:
+        return {
+            "choked": 0.0,
+            "Me": 0.0,
+            "Pe": 0.0,
+            "Te": 0.0,
+            "rho_e": 0.0,
+            "Ve": 0.0,
+            "Thrust": 0.0,
+        }
+
+    cp = gamma * R / (gamma - 1.0)
+
+    pr = max(P0 / Pt, 1e-12)  # protect from division errors
+    Ve = sqrt(max(0.0, 2.0 * cp * Tt * (1.0 - pr ** ((gamma - 1.0) / gamma))))
+
+    thrust = mdot * (Ve - V0) + (Pt - P0) * A_exit
+
+    return {
+        "choked": 0.0,
+        "Me": 0.0,
+        "Pe": float(P0),   # not used; set to ambient for compatibility
+        "Te": 0.0,
+        "rho_e": 0.0,
+        "Ve": float(Ve),
+        "Thrust": float(thrust),
+    }

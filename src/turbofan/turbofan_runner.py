@@ -8,18 +8,24 @@ from src.turbofan.hpc_subsystem import HPCSubsystem
 from src.turbofan.combustor import combustor_calc
 from src.turbofan.hpt_subsystem import HPTSubsystem
 from src.turbofan.lpt_subsystem import LPTSubsystem
-from src.turbofan.nozzle import nozzle_calc_isentropic_to_ambient
+from src.turbofan.nozzle import (
+    nozzle_calc_isentropic_to_ambient,
+    nozzle_calc_report_simple,
+)
 
-
-from src.turbofan.nozzle import nozzle_calc_isentropic_to_ambient
 
 def run_turbofan_core_balanced(
     throttle_cmd: float = 0.6,
     P0: float = 101325.0,
     T0: float = 288.15,
+    V0: float = 0.0,
     N1_RPM: float = 12000.0,
     N2_RPM: float = 9000.0,
+    N1_ref_rpm: float = 12000.0,
+    N2_ref_rpm: float = 9000.0,
     BPR: float = 5.0,
+    combustor_mode: str = "T4_cmd",          # validation: "fuel_cmd"
+    nozzle_mode: str = "choked_isentropic",  # validation: "report_simple"
     eff_mod_fan: float = 1.0,
     eff_mod_lpc: float = 1.0,
     eff_mod_hpc: float = 1.0,
@@ -29,10 +35,14 @@ def run_turbofan_core_balanced(
     A_bypass_nozzle: float = 0.20,
 ) -> Dict[str, float]:
     """
-    Balanced two-spool core:
+    Balanced two-spool core (steady-state):
       Fan -> LPC -> HPC -> Combustor -> HPT (match HPC torque) -> LPT (match Fan+LPC torque)
 
-    Returns a dict of key signals for logging/health/plots.
+    Phase 1 additions:
+      - combustor_mode: "fuel_cmd" or "T4_cmd"
+      - nozzle_mode: "report_simple" or "choked_isentropic"
+      - V0 flight speed passed into nozzle thrust equation
+      - N1_pct / N2_pct based on N1_ref_rpm / N2_ref_rpm
     """
 
     fan = FanSubsystem.from_default_files()
@@ -46,7 +56,12 @@ def run_turbofan_core_balanced(
 
     # FAN
     fan_out = fan.step(
-        P0=P0, T0=T0, N1_RPM=N1_RPM, Wc_total=Wc_total, BPR=BPR, eff_mod=eff_mod_fan
+        P0=P0,
+        T0=T0,
+        N1_RPM=N1_RPM,
+        Wc_total=Wc_total,
+        BPR=BPR,
+        eff_mod=eff_mod_fan,
     )
     P2 = fan_out["P1_fan"]
     T2 = fan_out["T1_raw"]
@@ -54,7 +69,11 @@ def run_turbofan_core_balanced(
 
     # LPC
     lpc_out = lpc.step(
-        P2_in=P2, T2_in=T2, N1_RPM=N1_RPM, Wc_core=Wc_core, eff_mod=eff_mod_lpc
+        P2_in=P2,
+        T2_in=T2,
+        N1_RPM=N1_RPM,
+        Wc_core=Wc_core,
+        eff_mod=eff_mod_lpc,
     )
 
     # HPC
@@ -72,6 +91,7 @@ def run_turbofan_core_balanced(
         T3=hpc_out["T2"],
         m_air=hpc_out["m_dot"],
         throttle_cmd=throttle_cmd,
+        mode=combustor_mode,
     )
 
     # HPT BALANCE (match HPC torque)
@@ -103,35 +123,55 @@ def run_turbofan_core_balanced(
         max_iter=80,
     )
 
-        # --- NOZZLES (core + bypass) ---
-    core_noz = nozzle_calc_isentropic_to_ambient(
+    # Nozzle selector (dual-mode)
+    def _noz(*, Pt: float, Tt: float, mdot: float, A_exit: float) -> Dict[str, float]:
+        if nozzle_mode == "report_simple":
+            return nozzle_calc_report_simple(
+                Pt=Pt, Tt=Tt, mdot=mdot, P0=P0, A_exit=A_exit, V0=V0
+            )
+        if nozzle_mode == "choked_isentropic":
+            return nozzle_calc_isentropic_to_ambient(
+                Pt=Pt, Tt=Tt, mdot=mdot, P0=P0, A_exit=A_exit, V0=V0
+            )
+        raise ValueError(f"Unknown nozzle_mode: {nozzle_mode}")
+
+    # --- NOZZLES (core + bypass) ---
+    core_noz = _noz(
         Pt=lpt_out["P_out"],
         Tt=lpt_out["T_out"],
         mdot=comb_out["m_gas"],
-        P0=P0,
         A_exit=A_core_nozzle,
     )
 
     mdot_bypass = fan_out["m_dot_core"] * BPR
-    bypass_noz = nozzle_calc_isentropic_to_ambient(
+    bypass_noz = _noz(
         Pt=fan_out["P1_fan"],
         Tt=fan_out["T1_raw"],
         mdot=mdot_bypass,
-        P0=P0,
         A_exit=A_bypass_nozzle,
     )
 
     thrust_total = core_noz["Thrust"] + bypass_noz["Thrust"]
 
+    # Percent spool speeds (display only; does not affect physics)
+    N1_pct = float(N1_RPM) / float(N1_ref_rpm) * 100.0 if N1_ref_rpm else 0.0
+    N2_pct = float(N2_RPM) / float(N2_ref_rpm) * 100.0 if N2_ref_rpm else 0.0
+
     # Flatten “signals” for the framework
-    signals = {
+    signals: Dict[str, float] = {
         # inlet
         "P0": float(P0),
         "T0": float(T0),
+        "V0": float(V0),
         "N1_RPM": float(N1_RPM),
         "N2_RPM": float(N2_RPM),
+        "N1_pct": float(N1_pct),
+        "N2_pct": float(N2_pct),
         "BPR": float(BPR),
         "throttle_cmd": float(throttle_cmd),
+
+        # modes (strings aren't floats, but we keep them as separate keys below if needed)
+        # keep numeric dict pure; if you want modes in JSON, add them in caller layer
 
         # compressor path
         "P2": float(P2),
@@ -151,11 +191,13 @@ def run_turbofan_core_balanced(
         "FAR": float(comb_out["FAR"]),
         "m_gas": float(comb_out["m_gas"]),
 
+        # thrust
         "Thrust_core": float(core_noz["Thrust"]),
         "Thrust_bypass": float(bypass_noz["Thrust"]),
-        "Thrust": float(thrust_total),
-        "Vexit_core": float(core_noz["Ve"]),
-        "Vexit_bypass": float(bypass_noz["Ve"]),
+        "thrust_total": float(thrust_total),
+        "Thrust": float(thrust_total),  # backward compatible key
+        "Vexit_core": float(core_noz.get("Ve", 0.0)),
+        "Vexit_bypass": float(bypass_noz.get("Ve", 0.0)),
 
         # map outputs / efficiencies / PR
         "PR_HPC": float(hpc_out["PR_HPC"]),
@@ -175,5 +217,8 @@ def run_turbofan_core_balanced(
         "TorqueDiff_N2": float(hpt_out["Torque_HPT"] - hpc_out["Torque_HPC"]),
         "TorqueDiff_N1": float(lpt_out["Torque_LPT"] - torque_required_n1),
     }
+
+    # If you want modes in the returned dict (for logging), you can add them
+    # as separate non-float keys in a wrapper layer. For now, keep signals numeric.
 
     return signals
