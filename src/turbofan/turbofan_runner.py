@@ -222,3 +222,137 @@ def run_turbofan_core_balanced(
     # as separate non-float keys in a wrapper layer. For now, keep signals numeric.
 
     return signals
+
+def run_turbofan_core_given_pr(
+    throttle_cmd: float = 0.6,
+    P0: float = 101325.0,
+    T0: float = 288.15,
+    V0: float = 0.0,
+    N1_RPM: float = 12000.0,
+    N2_RPM: float = 9000.0,
+    N1_ref_rpm: float = 12000.0,
+    N2_ref_rpm: float = 9000.0,
+    BPR: float = 5.0,
+    combustor_mode: str = "T4_cmd",
+    nozzle_mode: str = "choked_isentropic",
+    eff_mod_fan: float = 1.0,
+    eff_mod_lpc: float = 1.0,
+    eff_mod_hpc: float = 1.0,
+    eta_hpt: float = 0.9,
+    eta_lpt: float = 0.9,
+    PR_HPT: float = 0.8470916748046875,
+    PR_LPT: float = 0.8982644081115723,
+    A_core_nozzle: float = 0.05,
+    A_bypass_nozzle: float = 0.20,
+) -> Dict[str, float]:
+    """
+    Phase 2A runner: Turbine PRs are FIXED (scheduled), and spool speeds are intended
+    to be SOLVED externally such that torque residuals go to zero.
+    """
+
+    fan = FanSubsystem.from_default_files()
+    lpc = LPCSubsystem.from_default_files()
+    hpc = HPCSubsystem.from_default_files()
+    hpt = HPTSubsystem()
+    lpt = LPTSubsystem()
+
+    Wc_total = float(fan.fan_map.flow_vec.mean())
+
+    # FAN
+    fan_out = fan.step(P0=P0, T0=T0, N1_RPM=N1_RPM, Wc_total=Wc_total, BPR=BPR, eff_mod=eff_mod_fan)
+    P2 = fan_out["P1_fan"]
+    T2 = fan_out["T1_raw"]
+    Wc_core = fan_out["Wc_core"]
+
+    # LPC
+    lpc_out = lpc.step(P2_in=P2, T2_in=T2, N1_RPM=N1_RPM, Wc_core=Wc_core, eff_mod=eff_mod_lpc)
+
+    # HPC
+    hpc_out = hpc.step(P1=lpc_out["P3"], T1=lpc_out["T3"], N2_RPM=N2_RPM, Wc=lpc_out["m_dot_core"], eff_mod=eff_mod_hpc)
+
+    # COMBUSTOR
+    comb_out = combustor_calc(
+        P3=hpc_out["P2"],
+        T3=hpc_out["T2"],
+        m_air=hpc_out["m_dot"],
+        throttle_cmd=throttle_cmd,
+        mode=combustor_mode,
+    )
+
+    # HPT (FIXED PR)  ✅ you must implement this method in HPTSubsystem if missing
+    hpt_out = hpt.step_with_pr(
+    P4=comb_out["P4"],
+    T4=comb_out["T4"],
+    m_gas=comb_out["m_gas"],
+    N2_RPM=N2_RPM,
+    PR_turb=PR_HPT,
+    eta_turb=eta_hpt,
+)
+
+    # LPT (FIXED PR) ✅ implement if missing
+    lpt_out = lpt.step_with_pr(
+    P_in=hpt_out["P45"],
+    T_in=hpt_out["T45"],
+    m_gas=comb_out["m_gas"],
+    N1_RPM=N1_RPM,
+    PR_turb=PR_LPT,
+    eta_turb=eta_lpt,
+)
+
+    # nozzle selector (same as your code)
+    def _noz(*, Pt: float, Tt: float, mdot: float, A_exit: float) -> Dict[str, float]:
+        if nozzle_mode == "report_simple":
+            return nozzle_calc_report_simple(Pt=Pt, Tt=Tt, mdot=mdot, P0=P0, A_exit=A_exit, V0=V0)
+        if nozzle_mode == "choked_isentropic":
+            return nozzle_calc_isentropic_to_ambient(Pt=Pt, Tt=Tt, mdot=mdot, P0=P0, A_exit=A_exit, V0=V0)
+        raise ValueError(f"Unknown nozzle_mode: {nozzle_mode}")
+
+    core_noz = _noz(Pt=lpt_out["P_out"], Tt=lpt_out["T_out"], mdot=comb_out["m_gas"], A_exit=A_core_nozzle)
+    mdot_bypass = fan_out["m_dot_core"] * BPR
+    bypass_noz = _noz(Pt=fan_out["P1_fan"], Tt=fan_out["T1_raw"], mdot=mdot_bypass, A_exit=A_bypass_nozzle)
+
+    thrust_total = core_noz["Thrust"] + bypass_noz["Thrust"]
+
+    N1_pct = float(N1_RPM) / float(N1_ref_rpm) * 100.0 if N1_ref_rpm else 0.0
+    N2_pct = float(N2_RPM) / float(N2_ref_rpm) * 100.0 if N2_ref_rpm else 0.0
+
+    torque_required_n1 = fan_out["Torque_fan"] + lpc_out["Torque_LPC"]
+
+    signals: Dict[str, float] = {
+        "P0": float(P0), "T0": float(T0), "V0": float(V0),
+        "N1_RPM": float(N1_RPM), "N2_RPM": float(N2_RPM),
+        "N1_pct": float(N1_pct), "N2_pct": float(N2_pct),
+        "BPR": float(BPR), "throttle_cmd": float(throttle_cmd),
+
+        "P2": float(P2), "T2": float(T2),
+        "P3": float(lpc_out["P3"]), "T3": float(lpc_out["T3"]),
+        "P4": float(comb_out["P4"]), "T4": float(comb_out["T4"]),
+        "P45": float(hpt_out["P45"]), "T45": float(hpt_out["T45"]),
+        "P5": float(lpt_out["P_out"]), "T5": float(lpt_out["T_out"]),
+
+        "m_air": float(hpc_out["m_dot"]),
+        "m_fuel": float(comb_out["m_fuel"]),
+        "FAR": float(comb_out["FAR"]),
+        "m_gas": float(comb_out["m_gas"]),
+
+        "Thrust_core": float(core_noz["Thrust"]),
+        "Thrust_bypass": float(bypass_noz["Thrust"]),
+        "thrust_total": float(thrust_total),
+        "Thrust": float(thrust_total),
+
+        "PR_HPC": float(hpc_out["PR_HPC"]),
+        "eta_HPC": float(hpc_out["eta_HPC"]),
+        "PR_HPT": float(PR_HPT),
+        "PR_LPT": float(PR_LPT),
+
+        "Torque_FAN": float(fan_out["Torque_fan"]),
+        "Torque_LPC": float(lpc_out["Torque_LPC"]),
+        "Torque_HPC": float(hpc_out["Torque_HPC"]),
+        "Torque_HPT": float(hpt_out["Torque_HPT"]),
+        "Torque_LPT": float(lpt_out["Torque_LPT"]),
+        "TorqueReq_N1": float(torque_required_n1),
+
+        "TorqueDiff_N2": float(hpt_out["Torque_HPT"] - hpc_out["Torque_HPC"]),
+        "TorqueDiff_N1": float(lpt_out["Torque_LPT"] - torque_required_n1),
+    }
+    return signals

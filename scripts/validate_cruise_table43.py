@@ -45,6 +45,14 @@ out = run_turbofan_core_balanced(
     eta_lpt=0.9,
 )
 
+print("\n--- Available output keys ---")
+for k in out.keys():
+    print(k)
+
+print("\n--- Turbine PR values at cruise (Phase 1 balanced) ---")
+print("PR_HPT:", out["PR_HPT"])
+print("PR_LPT:", out["PR_LPT"])
+
 thrust = out["thrust_total"]
 fuel = out["m_fuel"]
 
