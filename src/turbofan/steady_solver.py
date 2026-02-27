@@ -14,10 +14,20 @@ from src.turbofan.pr_schedule import PRSchedule
 _SCHED_CACHE: dict[str, PRSchedule] = {}
 
 
-def _get_sched(path: str) -> PRSchedule:
+def _get_sched(
+    path: str,
+    *,
+    expected_mode: str | None = None,
+    P0: float | None = None,
+    T0: float | None = None,
+    V0: float | None = None,
+) -> PRSchedule:
     if path not in _SCHED_CACHE:
         _SCHED_CACHE[path] = PRSchedule(path)
-    return _SCHED_CACHE[path]
+
+    sched = _SCHED_CACHE[path]
+    sched.validate(expected_mode=expected_mode, P0=P0, T0=T0, V0=V0)
+    return sched
 
 
 @dataclass
@@ -50,6 +60,7 @@ def solve_n1_n2_scheduled_pr(
     eta_lpt: float = 0.9,
     N1_guess_pct: float = 76.8,
     N2_guess_pct: float = 93.1,
+    expected_mode: str | None = None,
 ) -> SolveRPMResult:
     """
     Phase 2B/2C solver:
@@ -57,7 +68,7 @@ def solve_n1_n2_scheduled_pr(
     with turbine PRs scheduled vs throttle.
     """
 
-    sched = _get_sched(pr_schedule_path)
+    sched = _get_sched(pr_schedule_path, expected_mode=expected_mode, P0=P0, T0=T0, V0=V0)
     PR_HPT, PR_LPT = sched.get(float(throttle_cmd))
 
     N1_lo, N1_hi = 0.40 * N1_ref_rpm, 1.05 * N1_ref_rpm

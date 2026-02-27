@@ -1,4 +1,21 @@
 {
+    "meta": {
+        "mode": "sls",
+        "P0": 101325.0,
+        "T0": 288.15,
+        "V0": 0.0,
+        "N1_ref_rpm": 12000.0,
+        "N2_ref_rpm": 9000.0,
+        "N1_pct_fixed": 76.8,
+        "N2_pct_fixed": 93.1,
+        "BPR": 9.0,
+        "combustor_mode": "T4_cmd",
+        "nozzle_mode": "report_simple",
+        "A_core_nozzle": 0.017,
+        "A_bypass_nozzle": 0.061,
+        "eta_hpt": 0.9,
+        "eta_lpt": 0.9
+    },
     "throttle": [
         0.15,
         0.23333333333333334,
