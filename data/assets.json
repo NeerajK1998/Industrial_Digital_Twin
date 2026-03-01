@@ -1,0 +1,13 @@
+{
+  "version": "assets_v1",
+  "assets": [
+    {
+      "asset_id": "demo-cnc",
+      "name": "Demo CNC",
+      "asset_type": "CNC",
+      "device_config": "configs/device_template.json",
+      "pdm_json": "data/PDM_Data.json",
+      "notes": "Auto-created default asset"
+    }
+  ]
+}

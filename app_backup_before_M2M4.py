@@ -267,148 +267,35 @@ def render_turbofan_ui():
 def render_cnc_ui():
     st.subheader("Live Monitoring (CNC)")
 
-    # ---- Data source selection (M4) ----
-    st.markdown("### Data Source")
-    source_mode = st.selectbox("Choose live source", ["Mock stream", "Replay CSV"], index=0)
-
-    if source_mode == "Replay CSV":
-        default_csv = str(OUTPUTS_DIR / "live_timeseries.csv")
-        replay_path = st.text_input("Replay CSV path", value=default_csv)
-        dt = st.number_input("Replay dt (s)", min_value=0.05, max_value=2.0, value=0.2, step=0.05)
-    else:
-        dt = st.number_input("Mock dt (s)", min_value=0.05, max_value=2.0, value=0.2, step=0.05)
-
-    st.divider()
-
-    # ---- Load CNC model (M2) ----
-    st.markdown("### CNC ML (trained model)")
+    # ---- ML status from live_timeseries.csv (demo) ----
+    st.markdown("### ML Status (baseline v0)")
     try:
-        from ml.predict_live_cnc import load_model, predict_from_timeseries
-        bundle = load_model("artifacts/cnc_model_v1.joblib")
-        st.success("CNC model loaded: artifacts/cnc_model_v1.joblib")
+        from ml.streamlit_ml import predict_from_live_csv
+        model_path = "outputs/ml/baseline_rf.joblib"
+        live_csv = "outputs/live_timeseries.csv"
+        pred, probs, fi = predict_from_live_csv(model_path, live_csv)
+
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.metric("Predicted State", pred)
+        with c2:
+            st.write("Probabilities")
+            st.json(probs)
+
+        if fi:
+            st.write("Top feature importances")
+            st.table([{"feature": k, "importance": float(v)} for k, v in fi])
+
     except Exception as e:
-        st.warning(f"CNC model not available yet: {e}")
-        st.info("Run: python -m ml.build_dataset_cnc  &&  python -m ml.train_cnc_baseline")
-        bundle = None
+        st.warning(f"ML not available yet: {e}")
 
     st.divider()
 
-    # ---- Live streaming / replay and inference loop (M2+M3+M4) ----
-    st.markdown("### Live Stream + Inference")
-    live_enable = st.checkbox("Enable Live Mode", value=False)
-    live_seconds = st.number_input("Duration (s)", min_value=1, max_value=120, value=10, step=1)
-    window_n = st.number_input("Inference window samples", min_value=20, max_value=400, value=200, step=10)
-
-    if live_enable:
-        from src.timeseries_logger import append_timeseries_row
-        from src.insights import severity_score, top_contributors_from_rf, recommended_action
-
-        out_ts = OUTPUTS_DIR / "live_timeseries.csv"
-
-        # Choose source
-        if source_mode == "Replay CSV":
-            from src.datasources import CSVReplaySource
-            src = CSVReplaySource(csv_path=replay_path, dt=float(dt), loop=False)
-        else:
-            from src.datasources import MockCNCSource
-            rpm_cmd = float(cfg.get("mission", {}).get("spindle_rpm_cmd", 12000.0))
-            feed_cmd = float(cfg.get("mission", {}).get("feed_cmd", 2000.0))
-            severity = float(cfg.get("mission", {}).get("severity", 1.0))
-            src = MockCNCSource(
-                runtime_s=float(live_seconds),
-                dt=float(dt),
-                rpm_cmd=rpm_cmd,
-                feed_cmd=feed_cmd,
-                severity=severity,
-            )
-
-        st.info("Streaming... writes outputs/live_timeseries.csv")
-        chart_placeholder = st.empty()
-        kpi_placeholder = st.empty()
-        pred_placeholder = st.empty()
-        why_placeholder = st.empty()
-
-        t_list, rpm_list, feed_list, vib_list, pwr_list = [], [], [], [], []
-
-        # Stream samples
-        for s in src.stream():
-            row = {"t": s.t, **s.signals}
-            append_timeseries_row(out_ts, row)
-
-            t_list.append(float(s.t))
-            rpm_list.append(float(s.signals.get("spindle_rpm", 0.0)))
-            feed_list.append(float(s.signals.get("feed_mm_min", 0.0)))
-            vib_list.append(float(s.signals.get("vibration", 0.0)))
-            pwr_list.append(float(s.signals.get("power_kw", 0.0)))
-
-            # KPIs
-            with kpi_placeholder.container():
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Spindle RPM", f"{rpm_list[-1]:.0f}")
-                c2.metric("Feed (mm/min)", f"{feed_list[-1]:.0f}")
-                c3.metric("Vibration (a.u.)", f"{vib_list[-1]:.3f}")
-                c4.metric("Power (kW)", f"{pwr_list[-1]:.2f}")
-
-            # chart
-            df_live = pd.DataFrame(
-                {
-                    "t": t_list,
-                    "spindle_rpm": rpm_list,
-                    "feed_mm_min": feed_list,
-                    "vibration": vib_list,
-                    "power_kw": pwr_list,
-                }
-            ).set_index("t")
-            chart_placeholder.line_chart(df_live)
-
-            # Inference once window is large enough
-            if bundle is not None and len(vib_list) >= int(window_n):
-                ts = {
-                    "spindle_rpm": rpm_list[-int(window_n):],
-                    "feed_mm_min": feed_list[-int(window_n):],
-                    "vibration": vib_list[-int(window_n):],
-                    "power_kw": pwr_list[-int(window_n):],
-                }
-
-                pred, probs, feat_row = predict_from_timeseries(ts, bundle)
-
-                # Insights (M3)
-                model = bundle["model"]
-                top_feats = top_contributors_from_rf(model, feat_row, topk=3)
-                sev = severity_score(pred, probs)
-                action = recommended_action(pred, top_feats)
-
-                with pred_placeholder.container():
-                    st.markdown("### Predicted State")
-                    if pred == "OK":
-                        st.success(f"OK  (severity {sev}/100)")
-                    elif pred == "WARNING":
-                        st.warning(f"WARNING  (severity {sev}/100)")
-                    else:
-                        st.error(f"FAULT  (severity {sev}/100)")
-                    st.caption("Probabilities")
-                    st.json(probs)
-
-                with why_placeholder.container():
-                    st.markdown("### Why / Risk / Action")
-                    st.write("**Top contributors:**")
-                    st.table([{"feature": f, "score": float(v)} for f, v in top_feats])
-                    st.write("**Recommended action:**")
-                    st.info(action)
-
-            # Stop condition for mock mode
-            if source_mode == "Mock stream" and float(s.t) >= float(live_seconds):
-                break
-
-        st.success("Live stream finished.")
-
-    st.divider()
-
-    # ---- Run framework (CNC physics / logic pipeline) ----
-    st.markdown("### CNC Run Pipeline (framework)")
+    # ---- Run framework (CNC) ----
     col1, col2 = st.columns([1.1, 0.9])
 
     with col1:
+        st.subheader("Run Control")
         st.write(f"**Device:** {cfg.get('device_name','(unnamed)')}  |  **Type:** {cfg.get('device_type','(unknown)')}")
         run_btn = st.button("▶ Run Framework", type="primary")
 
@@ -423,12 +310,13 @@ def render_cnc_ui():
             k3.metric("Thrust (Force)", f"{float(last['Thrust']):.2f}")
             k4.metric("Fuel (Power)", f"{float(last['FuelFlow']):.2f}")
             k5.metric("Status", str(last["Status"]))
+            st.write("Warnings:", last.get("HealthWarnings", ""))
         else:
             st.info("No runs yet. Click **Run Framework**.")
 
     if run_btn:
         if pdm_path is None or pdm_choice is None:
-            st.error("No PDM selected (CNC).")
+            st.error("No PDM selected.")
             return
 
         pdm = load_json(pdm_path)
@@ -456,6 +344,7 @@ def render_cnc_ui():
 
         status = decide_status(outputs, limits=limits)
         warnings = check_health_warnings(pdm)
+
         append_run_summary(RUNSUMMARY, outputs, pdm, status, warnings)
 
         st.success("Run complete and logged.")
@@ -487,12 +376,8 @@ def render_cnc_ui():
             with c1:
                 version = st.text_input("Version", value=str(comp_obj.get("Version", "")))
                 cycles = st.number_input("CyclesSinceInstall", value=float(comp_obj.get("CyclesSinceInstall", 0)), step=1.0)
-                eff = st.number_input(
-                    "Efficiency_Modifier",
-                    value=float(comp_obj.get("Efficiency_Modifier", 1.0)),
-                    step=0.01,
-                    format="%.4f",
-                )
+                eff = st.number_input("Efficiency_Modifier", value=float(comp_obj.get("Efficiency_Modifier", 1.0)),
+                                      step=0.01, format="%.4f")
             with c2:
                 maxc = st.number_input("MaxCycles (0 = None)", value=float(comp_obj.get("MaxCycles", 0) or 0), step=1.0)
                 notes = st.text_area("Notes", value=str(comp_obj.get("Notes", "")))
@@ -533,6 +418,7 @@ def render_cnc_ui():
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
     else:
         st.info("No components yet. Add your first component above.")
+
 
 # =========================
 # MAIN

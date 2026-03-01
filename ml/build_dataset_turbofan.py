@@ -40,12 +40,17 @@ DERIVED_KEYS = [
 ]
 
 
-def _safe_get(d: Dict[str, float], k: str) -> float:
-    v = d.get(k, 0.0)
+def _safe_get(d: Dict[str, float], k: str):
+    v = d.get(k, "")
+
+    # if value is string (like schema_version), keep it
+    if isinstance(v, str):
+        return v
+
     try:
         return float(v)
     except Exception:
-        return 0.0
+        return ""
 
 
 def _safe_div(a: float, b: float, default: float = 0.0) -> float:
@@ -94,7 +99,7 @@ def add_derived_features(out: Dict[str, float]) -> None:
     out["PR_fan"] = _safe_div(P2, P0)
     out["PR_hpc"] = _safe_div(P3, P2)
     out["PR_core_total"] = _safe_div(P3, P0)
-    out["PR_turb"] = _safe_div(P4, P5)
+    out["PR_turb"] = _safe_div(P5, P4)
 
     # ======================
     # Performance proxies
@@ -171,6 +176,8 @@ def generate_one_sample(
 
         # Derived features
         add_derived_features(out)
+
+        out["schema_version"] = "turbofan_dataset_A_v1.0.0"
 
         return out
 
@@ -316,11 +323,12 @@ def build_dataset(
 
     # Write CSV
     fieldnames = FEATURE_KEYS + DERIVED_KEYS + [
-        "label_status",
-        "label_state",
-        "degradation_score",
-        "fault_class",
-    ]
+    "label_status",
+    "label_state",
+    "degradation_score",
+    "fault_class",
+    "schema_version",
+]
 
     with open(out_csv, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)

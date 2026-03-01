@@ -1,67 +1,65 @@
+from typing import Dict, Any, Tuple
 import joblib
 import pandas as pd
-import numpy as np
+
+from ml.feature_contract import FEATURES_V1, SCHEMA_VERSION
+from ml.build_dataset_turbofan import add_derived_features  # reuse exact same feature logic
 
 
-def slope(x: np.ndarray) -> float:
-    if len(x) < 2:
-        return 0.0
-    t = np.arange(len(x), dtype=float)
-    A = np.vstack([t, np.ones_like(t)]).T
-    m, _b = np.linalg.lstsq(A, x, rcond=None)[0]
-    return float(m)
+LABEL_MAP = {0: "OK", 1: "WARNING", 2: "FAULT"}
 
 
-def extract_features(df: pd.DataFrame) -> dict:
-    vib = df["vibration"].to_numpy(dtype=float)
-    pwr = df["power_kw"].to_numpy(dtype=float)
-    rpm = df["spindle_rpm"].to_numpy(dtype=float)
-    feed = df["feed_mm_min"].to_numpy(dtype=float)
+def load_model(path: str = "artifacts/turbofan_model_v1.joblib") -> Dict[str, Any]:
+    bundle = joblib.load(path)
 
-    feats = {
-        "vib_mean": float(vib.mean()),
-        "vib_std": float(vib.std(ddof=1) if len(vib) > 1 else 0.0),
-        "vib_max": float(vib.max()),
-        "vib_p95": float(np.percentile(vib, 95)),
-        "vib_slope": slope(vib),
-
-        "pwr_mean": float(pwr.mean()),
-        "pwr_std": float(pwr.std(ddof=1) if len(pwr) > 1 else 0.0),
-        "pwr_max": float(pwr.max()),
-        "pwr_p95": float(np.percentile(pwr, 95)),
-        "pwr_slope": slope(pwr),
-
-        "rpm_mean": float(rpm.mean()),
-        "rpm_std": float(rpm.std(ddof=1) if len(rpm) > 1 else 0.0),
-
-        "feed_mean": float(feed.mean()),
-        "feed_std": float(feed.std(ddof=1) if len(feed) > 1 else 0.0),
-
-        # dataset includes these; for live we may not know them -> set 0
-        "rpm_cmd": 0.0,
-        "feed_cmd": 0.0,
-        "severity": 0.0,
-    }
-    return feats
+    # Safety checks
+    if bundle.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(
+            f"Model schema mismatch. Model has {bundle.get('schema_version')} vs expected {SCHEMA_VERSION}"
+        )
+    if bundle.get("features") != FEATURES_V1:
+        raise ValueError("Model features do not match FEATURES_V1 contract.")
+    return bundle
 
 
-def main():
-    bundle = joblib.load("outputs/ml/baseline_rf.joblib")
+def build_feature_row_from_out(out: Dict[str, float]) -> Dict[str, float]:
+    """
+    Take raw turbofan outputs and ensure derived features exist,
+    then return ONLY the FEATURES_V1 keys.
+    """
+    # Ensure derived features are present
+    add_derived_features(out)
+
+    # Ensure schema_version exists (optional, but nice)
+    out["schema_version"] = SCHEMA_VERSION
+
+    row = {}
+    for k in FEATURES_V1:
+        if k not in out:
+            raise KeyError(f"Missing required feature key in out: {k}")
+        row[k] = float(out[k])
+    return row
+
+
+def predict_from_out(
+    out: Dict[str, float],
+    bundle: Dict[str, Any],
+) -> Tuple[str, Dict[str, float]]:
+
     model = bundle["model"]
-    cols = bundle["columns"]
 
-    ts = pd.read_csv("outputs/live_timeseries.csv")
-    feats = extract_features(ts)
-    X = pd.DataFrame([feats])[cols].fillna(0.0)
+    row = build_feature_row_from_out(out)
 
-    pred = model.predict(X)[0]
+    # Build DataFrame with correct column names
+    X = pd.DataFrame([row], columns=FEATURES_V1)
+
+    pred_int = int(model.predict(X)[0])
     proba = model.predict_proba(X)[0]
-    classes = list(model.classes_)
 
-    print("Prediction:", pred)
-    print("Probabilities:", {c: float(p) for c, p in zip(classes, proba)})
+    proba_dict = {LABEL_MAP[i]: float(proba[i]) for i in range(len(proba))}
+    return LABEL_MAP[pred_int], proba_dict
 
 
 if __name__ == "__main__":
-    main()
-
+    # Quick self-test (only if you want)
+    print("✅ predict_live module ready.")
