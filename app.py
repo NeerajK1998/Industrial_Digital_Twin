@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import joblib
 import json
 from pathlib import Path
 
@@ -288,6 +289,7 @@ def render_cnc_ui():
     # ---- Load CNC model (M2) ----
     st.markdown("### CNC ML (trained model)")
     try:
+        import joblib
         from ml.predict_live_cnc import load_model, predict_from_timeseries
         bundle = load_model("artifacts/cnc_model_v1.joblib")
         st.success("CNC model loaded: artifacts/cnc_model_v1.joblib")
