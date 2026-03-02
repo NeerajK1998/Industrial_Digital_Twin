@@ -461,7 +461,13 @@ def render_cnc_ui():
         limits_cfg = cfg.get("limits", {})
         limits = {k: (float(v[0]), float(v[1])) for k, v in limits_cfg.items()}
 
-        status = decide_status(outputs, limits=limits)
+        #status = decide_status(outputs, limits=limits)
+
+        if asset_type == "turbofan":
+            status = decide_status(outputs, limits=limits)
+        else:
+            status = outputs.get("predicted_state", outputs.get("health_state", "UNKNOWN"))
+
         warnings = check_health_warnings(pdm)
         append_run_summary(RUNSUMMARY, outputs, pdm, status, warnings)
 
