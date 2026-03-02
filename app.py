@@ -21,7 +21,9 @@ from src.asset_registry import (
 # -----------------------------
 # Turbofan ML
 # -----------------------------
-from ml.predict_live import load_model, predict_from_out
+# from ml.predict_live import load_model, predict_from_out
+import joblib
+from ml.predict_live import predict_from_out
 from src.turbofan.turbofan_runner import run_turbofan_core_balanced
 
 # -----------------------------
@@ -67,9 +69,12 @@ def load_runsummary() -> pd.DataFrame:
 # =========================
 # Cached model loader
 # =========================
+#@st.cache_resource
+#def get_turbofan_model_bundle():
+#   return load_model("artifacts/turbofan_model_v1.joblib")
 @st.cache_resource
 def get_turbofan_model_bundle():
-    return load_model("artifacts/turbofan_model_v1.joblib")
+    return joblib.load("artifacts/turbofan_model_v1.joblib")
 
 
 # =========================
