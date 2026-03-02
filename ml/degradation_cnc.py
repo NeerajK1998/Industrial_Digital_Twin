@@ -64,16 +64,16 @@ def synthesize_timeseries(
 def label_from_degradation(deg: CNCDegradation) -> int:
     """
     0=OK, 1=WARNING, 2=FAULT
-    Simple severity mapping from injected faults.
+    Minimal, generator-aligned mapping:
+    - OK: max degradation < 0.20
+    - WARNING: 0.20 <= max degradation < 0.60
+    - FAULT: max degradation >= 0.60
     """
-    score = 0.0
-    score += 0.55 * deg.bearing_wear
-    score += 0.30 * deg.tool_wear
-    score += 0.30 * deg.imbalance
+    m = max(deg.bearing_wear, deg.imbalance, deg.tool_wear)
 
-    if score >= 0.65:
+    if m >= 0.60:
         return 2
-    if score >= 0.30:
+    if m >= 0.20:
         return 1
     return 0
 
